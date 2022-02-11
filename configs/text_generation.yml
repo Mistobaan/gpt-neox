@@ -5,9 +5,9 @@
   "text-gen-type": "unconditional",
 
   # Params for all
-  "maximum_tokens": 102,
-  "temperature": 1.0,
-  "top_p": 0.0,
+  "maximum_tokens": 60,
+  "temperature": 0.0,
+  "top_p": 1.0,
   "top_k": 0,
   "recompute": false,
 

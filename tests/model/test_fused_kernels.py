@@ -1,5 +1,18 @@
 import os
+try:
+    from transformers import BertTokenizer, GPT2Tokenizer
+    from transformers.models.bert.modeling_bert import BertModel
+    from transformers.models.gpt2.modeling_gpt2 import GPT2Model
+    import transformers
 
+    transformers.logging.set_verbosity(
+        transformers.logging.FATAL,
+    )
+
+except:
+    print(
+        "\n[Fail] Please install `transformers` package to test fused kernels\n")
+    exit(-1)
 if __name__ == "__main__":
     import sys
 
@@ -59,7 +72,8 @@ def test_fused_softmax():
 
     attention = bert.encoder.layer[0].attention.self
     key_layer = attention.transpose_for_scores(attention.key(embedding_output))
-    query_layer = attention.transpose_for_scores(attention.query(embedding_output))
+    query_layer = attention.transpose_for_scores(
+        attention.query(embedding_output))
 
     attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
     attention_scores /= math.sqrt(key_layer.size()[-1])
@@ -150,7 +164,7 @@ def test_fused_upper_triangle_mask_softmax():
     attn_weights = torch.matmul(q, k.transpose(-1, -2))
 
     sq, sk = q.size(-2), k.size(-2)
-    causal_mask = attn.attn.bias[:, :, sk - sq : sk, :sk].bool()
+    causal_mask = attn.attn.bias[:, :, sk - sq: sk, :sk].bool()
     total_mask = ~(causal_mask & (attention_mask == 0))
     """
     tensor([[[[False,  True,  True,  ...,  True,  True,  True],
@@ -232,9 +246,7 @@ if __name__ == "__main__":
             transformers.logging.FATAL,
         )
 
-    except:
-        print("\n[Fail] Please install `transformers` package to test fused kernels\n")
-        exit(-1)
+if __name__ == "__main__":
 
     test_load_fused_kernels()
     test_fused_softmax()

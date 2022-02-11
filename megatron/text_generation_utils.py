@@ -69,7 +69,8 @@ def pad_batch(context_tokens: List[List[int]], pad_id: int, pad_len: int):
         if context_length < pad_len:
             tokens.extend([pad_id] * (pad_len - context_length))
         elif context_length > pad_len:
-            raise ValueError("context_length is bigger than to be padded length")
+            raise ValueError(
+                "context_length is bigger than to be padded length")
         context_lengths.append(context_length)
     return context_tokens, context_lengths
 
@@ -90,19 +91,23 @@ def filter_logits(logits, top_k=0, top_p=0.0, filter_value=-float("Inf")):
     if top_k > 0:
         # Remove all tokens with a probability less than the
         # last token of the top-k
-        indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
+        indices_to_remove = logits < torch.topk(logits, top_k)[
+            0][..., -1, None]
         logits[indices_to_remove] = filter_value
 
     if top_p > 0.0:
         # convert to 1D
-        sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
-        cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+        sorted_logits, sorted_indices = torch.sort(
+            logits, descending=True, dim=-1)
+        cumulative_probs = torch.cumsum(
+            F.softmax(sorted_logits, dim=-1), dim=-1)
 
         # Remove tokens with cumulative probability above the threshold
         sorted_indices_to_remove = cumulative_probs > top_p
         # Shift the indices to the right to keep also the first token
         # above the threshold
-        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+        sorted_indices_to_remove[...,
+                                 1:] = sorted_indices_to_remove[..., :-1].clone()
         sorted_indices_to_remove[..., 0] = 0
         for i in range(sorted_indices.size(0)):
             indices_to_remove = sorted_indices[i][sorted_indices_to_remove[i]]
@@ -132,6 +137,8 @@ def forward_model(model, model_inputs, is_pipe_parallel=False) -> torch.Tensor:
     """
     # because someone at deepspeed decided pipeline modules couldn't use kwargs,
     # we need to forward a pipe model differently to a normal model
+    import ipdb
+    ipdb.set_trace()
     if not is_pipe_parallel:
         return model.module(model_inputs)
     else:
@@ -174,7 +181,7 @@ def stop_tokens_in_completion(stop_tokens, context_tokens, batch_index, current_
     res = []
     for token_group in stop_tokens:
         context = context_tokens[batch_index, : current_index + 1]
-        context = context[-len(token_group) :]
+        context = context[-len(token_group):]
         if context.shape[0] == token_group.shape[0]:
             res.append(all(token_group == context))
         else:
@@ -254,7 +261,8 @@ def stream_tokens(
     )
 
     # get attention mask / position ids
-    context_tokens, attention_mask, position_ids = get_batch(neox_args, context_tokens)
+    context_tokens, attention_mask, position_ids = get_batch(
+        neox_args, context_tokens)
 
     # set variables
     eos_token_id = eos_token_id or neox_args.tokenizer.eod
@@ -276,7 +284,8 @@ def stream_tokens(
     with torch.no_grad():
         # initialize generation variables
         state_is_done = torch.zeros([batch_size]).byte().cuda()
-        token_generation_end_index = torch.ones([batch_size]).long().cuda() * (-1)
+        token_generation_end_index = torch.ones(
+            [batch_size]).long().cuda() * (-1)
 
         while token_index_to_generate <= last_token_index_to_generate:
             if recompute:  # recompute all tokens
@@ -285,7 +294,8 @@ def stream_tokens(
                     position_ids,
                     attention_mask,
                 )
-                logits = forward_model(model, model_inputs, neox_args.is_pipe_parallel)
+                logits = forward_model(
+                    model, model_inputs, neox_args.is_pipe_parallel)
                 if logits is not None:  # if pipe parallel, not all ranks return logits
                     generated_token_logits = logits[
                         :, token_index_to_generate - 1, :
@@ -293,7 +303,8 @@ def stream_tokens(
             else:  # use kv cache
                 if token_index_to_generate == first_token_index_to_generate:
                     tokens_to_use = context_tokens[:, :token_index_to_generate]
-                    positions_to_use = position_ids[:, :token_index_to_generate]
+                    positions_to_use = position_ids[:,
+                                                    :token_index_to_generate]
                 else:
                     tokens_to_use = context_tokens[:, token_index_to_generate - 1].view(
                         batch_size, -1
@@ -308,7 +319,8 @@ def stream_tokens(
                     attention_mask,  # attention_mask
                 )
 
-                logits = forward_model(model, model_inputs, neox_args.is_pipe_parallel)
+                logits = forward_model(
+                    model, model_inputs, neox_args.is_pipe_parallel)
                 if logits is not None:  # if pipe parallel, not all ranks return logits
                     generated_token_logits = (
                         logits[:, -1].view(batch_size, -1).contiguous()
@@ -327,7 +339,8 @@ def stream_tokens(
                     generated_token_logits = filter_logits(
                         generated_token_logits, top_k=top_k, top_p=top_p
                     )
-                    next_token_log_probs = F.softmax(generated_token_logits, dim=-1)
+                    next_token_log_probs = F.softmax(
+                        generated_token_logits, dim=-1)
                     generated_tokens = torch.multinomial(
                         next_token_log_probs, num_samples=1
                     ).view(-1)
@@ -504,9 +517,10 @@ def generate_samples_from_prompt(
         ):
 
             if end_index >= start_index:
-                generated_tokens = tokens[start_index : end_index + 1]
+                generated_tokens = tokens[start_index: end_index + 1]
                 try:
-                    generated_text = neox_args.tokenizer.detokenize(generated_tokens)
+                    generated_text = neox_args.tokenizer.detokenize(
+                        generated_tokens)
                     message = None
                 except KeyError:
                     generated_text = None
@@ -723,7 +737,10 @@ def generate_samples_interactive(
 
         if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
             os.system("clear")
-            raw_text = input("Context prompt >>> ")
+            try:
+                raw_text = input("Context prompt >>> ")
+            except EOFError:
+                break
             context_tokens = neox_args.tokenizer.tokenize(raw_text)
             if len(context_tokens) == 0:
                 context_tokens = [neox_args.tokenizer.eod]
@@ -742,6 +759,8 @@ def generate_samples_interactive(
         terminate_runs = broadcast_terminate_signal(terminate_runs)
         if terminate_runs == 1:
             return
+
+        generated_text = ""
         for (
             batch_context_tokens,
             batch_token_generation_start_index,
@@ -765,7 +784,7 @@ def generate_samples_interactive(
                     .numpy()
                     .tolist()[
                         batch_token_generation_start_index[0]
-                        .item() : batch_token_generation_end_index[0]
+                        .item(): batch_token_generation_end_index[0]
                         .item()
                     ]
                 )
