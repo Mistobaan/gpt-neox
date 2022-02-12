@@ -318,7 +318,9 @@ class NeoXArgs(*BASE_CLASSES):
                 overwrite_values[k] = v
 
         # load args
-        neox_args = cls.from_ymls(paths_to_yml_files=conf_files, overwrite_values=overwrite_values)
+        neox_args = cls.from_ymls(
+            paths_to_yml_files=conf_files, overwrite_values=overwrite_values
+        )
 
         if neox_args.wandb_group is not None:
             # concat the wandb group name with a uid to make sure it's unique

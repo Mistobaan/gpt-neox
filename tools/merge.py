@@ -1,5 +1,5 @@
 """
-script to merge or split model parallel checkpoints 
+script to merge or split model parallel checkpoints
 
 This script:
 - assumes a checkpoint directory with pipeline parallel checkpoints (i.e. a global_step directory with files named like 'layer_00-model_00-model_states.pt')
