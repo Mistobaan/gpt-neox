@@ -137,8 +137,6 @@ def forward_model(model, model_inputs, is_pipe_parallel=False) -> torch.Tensor:
     """
     # because someone at deepspeed decided pipeline modules couldn't use kwargs,
     # we need to forward a pipe model differently to a normal model
-    import ipdb
-    ipdb.set_trace()
     if not is_pipe_parallel:
         return model.module(model_inputs)
     else:

@@ -15,7 +15,6 @@
 
 import sys
 import torch
-import wandb
 from megatron import mpu, print_rank_0
 from megatron.utils import report_memory
 
@@ -332,4 +331,5 @@ def tb_wandb_log(
         if tensorboard_writer:
             tensorboard_writer.add_scalar(key, value, iteration_no)
         if use_wandb:
+            import wandb
             wandb.log({key: value}, step=iteration_no)

@@ -23,9 +23,6 @@ import time
 import socket
 from typing import Dict, List
 
-import requests
-import wandb
-from wandb import UsageError
 
 import torch
 
@@ -39,7 +36,8 @@ from collections import deque
 
 def reduce_losses(losses):
     """Reduce a tensor of losses across all GPUs."""
-    reduced_losses = torch.cat([loss.clone().detach().view(1) for loss in losses])
+    reduced_losses = torch.cat(
+        [loss.clone().detach().view(1) for loss in losses])
     torch.distributed.all_reduce(reduced_losses)
     reduced_losses = reduced_losses / torch.distributed.get_world_size()
     return reduced_losses
@@ -49,11 +47,13 @@ def report_memory(name):
     """Simple GPU memory report."""
     mega_bytes = 1024.0 * 1024.0
     string = name + " memory (MB)"
-    string += " | allocated: {}".format(torch.cuda.memory_allocated() / mega_bytes)
+    string += " | allocated: {}".format(
+        torch.cuda.memory_allocated() / mega_bytes)
     string += " | max allocated: {}".format(
         torch.cuda.max_memory_allocated() / mega_bytes
     )
-    string += " | reserved: {}".format(torch.cuda.memory_reserved() / mega_bytes)
+    string += " | reserved: {}".format(
+        torch.cuda.memory_reserved() / mega_bytes)
     string += " | max reserved: {}".format(
         torch.cuda.max_memory_reserved() / mega_bytes
     )
@@ -95,7 +95,8 @@ def get_ltor_masks_and_position_ids(
         loss_mask[data == eod_token] = 0.0
 
     # Position ids.
-    position_ids = torch.arange(seq_length, dtype=torch.long, device=data.device)
+    position_ids = torch.arange(
+        seq_length, dtype=torch.long, device=data.device)
     position_ids = position_ids.unsqueeze(0).expand_as(data)
 
     return attention_mask, loss_mask, position_ids
@@ -130,6 +131,7 @@ def is_mp_rank_0():
 
 def get_wandb_api_key(neox_args):
     """Get Weights and Biases API key from ENV or .netrc file. Otherwise return None"""
+    import requests
     if "WANDB_LOCAL" in os.environ:
         return "LOCAL"
     if "WANDB_API_KEY" in os.environ:
@@ -145,7 +147,8 @@ def init_wandb(neox_args):
     # Wandb. (one worker per machine)
     if neox_args.use_wandb == False:
         return
-
+    import wandb
+    from wandb import UsageError
     use_wandb = is_local_main() and (get_wandb_api_key(neox_args=neox_args) is not None)
     neox_args.update_value("use_wandb", use_wandb)
     if neox_args.use_wandb:
@@ -192,8 +195,9 @@ def obtain_resource_pool(
 
 
 def natural_sort(l):
-    convert = lambda text: int(text) if text.isdigit() else text.lower()
-    alphanum_key = lambda key: [convert(c) for c in re.split("([0-9]+)", key)]
+    def convert(text): return int(text) if text.isdigit() else text.lower()
+    def alphanum_key(key): return [convert(c)
+                                   for c in re.split("([0-9]+)", key)]
     return sorted(l, key=alphanum_key)
 
 
@@ -279,7 +283,8 @@ class Timers:
             value = self.timers[name].elapsed(reset=reset) / normalizer
 
             if self.tensorboard_writer:
-                self.tensorboard_writer.add_scalar(f"timers/{name}", value, iteration)
+                self.tensorboard_writer.add_scalar(
+                    f"timers/{name}", value, iteration)
 
             if self.use_wandb:
                 wandb.log({f"timers/{name}": value}, step=iteration)
@@ -289,7 +294,8 @@ class Timers:
         assert normalizer > 0.0
         string = "time (ms)"
         for name in names:
-            elapsed_time = self.timers[name].elapsed(reset=reset) * 1000.0 / normalizer
+            elapsed_time = self.timers[name].elapsed(
+                reset=reset) * 1000.0 / normalizer
             string += " | {}: {:.2f}".format(name, elapsed_time)
         if torch.distributed.is_initialized():
             if torch.distributed.get_rank() == 0:
@@ -385,7 +391,8 @@ def get_total_params(model):
     else:
         params = 0
 
-    total_n_parameters = torch.tensor([params]).cuda(torch.cuda.current_device())
+    total_n_parameters = torch.tensor(
+        [params]).cuda(torch.cuda.current_device())
     torch.distributed.all_reduce(total_n_parameters)
     total_n_parameters = total_n_parameters.item()
     return total_n_parameters
@@ -412,7 +419,8 @@ def setup_for_inference_or_eval(
         "checkpoint_activations": False,
         "partition_activations": False,
         "no_load_optim": True,
-        "zero_optimization": None,  # disable zero optimization (won't be used in inference, and loading zero optimizer can cause errors)
+        # disable zero optimization (won't be used in inference, and loading zero optimizer can cause errors)
+        "zero_optimization": None,
     }
     if overwrite_values:
         _overwrite_values.update(overwrite_values)

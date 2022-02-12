@@ -2,7 +2,6 @@ import os
 import yaml
 import json
 import logging
-import shortuuid
 import copy
 import torch
 import argparse
@@ -126,7 +125,8 @@ class NeoXArgs(*BASE_CLASSES):
                 from torch.utils.tensorboard import SummaryWriter
 
                 print("> setting tensorboard ...")
-                self.tensorboard_writer = SummaryWriter(log_dir=self.tensorboard_dir)
+                self.tensorboard_writer = SummaryWriter(
+                    log_dir=self.tensorboard_dir)
             except (ModuleNotFoundError, ImportError):
                 print(
                     "WARNING: TensorBoard writing requested but is not "
@@ -145,7 +145,8 @@ class NeoXArgs(*BASE_CLASSES):
         overwrite_values: If provided, overwrite any values in the yamls with these values
         """
 
-        print(cls.__name__ + ".from_ymls() " + str(paths_to_yml_files), flush=True)
+        print(cls.__name__ + ".from_ymls() " +
+              str(paths_to_yml_files), flush=True)
 
         # initialize an empty config dictionary to be filled by yamls
         config = dict()
@@ -245,7 +246,8 @@ class NeoXArgs(*BASE_CLASSES):
             help="Configuration file path. Multiple files can be provided and will be merged.",
         )
 
-        group = parser.add_argument_group(title="Weights and Biases monitoring args")
+        group = parser.add_argument_group(
+            title="Weights and Biases monitoring args")
 
         group.add_argument(
             "--wandb_group",
@@ -306,10 +308,12 @@ class NeoXArgs(*BASE_CLASSES):
         # load config files
         conf_files = args_parsed.conf_file
         if args_parsed.conf_dir:
-            conf_files = [os.path.join(args_parsed.conf_dir, f) for f in conf_files]
+            conf_files = [os.path.join(args_parsed.conf_dir, f)
+                          for f in conf_files]
 
         # enables us to pass in `small` instead of `small.yml`
-        conf_files = [(cf if cf.endswith(".yml") else cf + ".yml") for cf in conf_files]
+        conf_files = [(cf if cf.endswith(".yml") else cf + ".yml")
+                      for cf in conf_files]
 
         # determine overwrite values
         overwrite_values = dict()
@@ -378,7 +382,8 @@ class NeoXArgs(*BASE_CLASSES):
             configured_value = getattr(self, key)
             if configured_value != default_value:
                 args_list.extend(
-                    self.convert_key_value_to_command_line_arg(key, configured_value)
+                    self.convert_key_value_to_command_line_arg(
+                        key, configured_value)
                 )
 
         if (
@@ -508,7 +513,8 @@ class NeoXArgs(*BASE_CLASSES):
                     default_info = ""
                 dots = "." * (64 - len(print_str))
                 print_str += dots
-                str_list.append({"print_str": print_str, "default_info": default_info})
+                str_list.append(
+                    {"print_str": print_str, "default_info": default_info})
 
             for arg in sorted(
                 sorted(str_list, key=lambda x: x["print_str"].lower()),
@@ -611,8 +617,9 @@ class NeoXArgs(*BASE_CLASSES):
 
         # wandb
         # sets a unique wandb group
-        if self.wandb_group is None:
+        if self.use_wandb and self.wandb_group is None:
             # if none is defined a uuid is set for the run
+            import shortuuid
             self.wandb_group = shortuuid.uuid()
 
         # number of gpus
@@ -759,7 +766,8 @@ class NeoXArgs(*BASE_CLASSES):
 
         # Attention config
         if self.attention_config is None:
-            self.update_value("attention_config", [[["global"], self.num_layers]])
+            self.update_value("attention_config", [
+                              [["global"], self.num_layers]])
         self.update_value(
             "attention_config",
             expand_attention_types(self.attention_config, self.num_layers),
@@ -947,7 +955,8 @@ class NeoXArgs(*BASE_CLASSES):
                 ]
             ]
         )
-        assert any(has_separate_path) == all(has_separate_path), assert_error_mess
+        assert any(has_separate_path) == all(
+            has_separate_path), assert_error_mess
 
         # assert that if train / valid / test data path(s) and weights are provided, that the paths and the weights should be equal length
         if self.train_data_paths is not None:

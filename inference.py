@@ -12,27 +12,62 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from megatron.model import (
+    GPT2ModelPipe,
+    SoftEmbedding,
+)
+import deepspeed
 import datetime
 import torch
 import json
+import os
 import threading
+import argparse
 from flask import Flask, request, jsonify
 from flask_restful import Resource, Api
 from typing import List
-import deepspeed
-from deepspeed.launcher.runner import main
+
 from megatron import print_rank_0, mpu
-from megatron.training import get_model, get_batch_pipe
 from megatron.checkpointing import load_checkpoint
 from megatron.utils import get_total_params
-from megatron.text_generation_utils import pad_batch, forward_model, filter_logits, switch, stop_tokens_in_completion
+from megatron.text_generation_utils import pad_batch, forward_model, filter_logits, switch, stop_tokens_in_completion, generate_samples_from_prompt
 from megatron.utils import get_ltor_masks_and_position_ids
+from megatron.neox_arguments import NeoXArgs
+from megatron.initialize import initialize_megatron
 
 from functools import partial
 import copy
 from torch import functional as F
 GENERATE_NUM = 0
 lock = threading.Lock()
+
+
+def print_latency(latency_set, title=""):
+    # 10 warmup queries
+    latency_set = latency_set[10:]
+    count = len(latency_set)
+    if count > 0:
+        latency_set.sort()
+        n50 = (count - 1) * 0.5 + 1
+        n90 = (count - 1) * 0.9 + 1
+        n95 = (count - 1) * 0.95 + 1
+        n99 = (count - 1) * 0.99 + 1
+        n999 = (count - 1) * 0.999 + 1
+
+        avg = sum(latency_set) / count
+        p50 = latency_set[int(n50) - 1]
+        p90 = latency_set[int(n90) - 1]
+        p95 = latency_set[int(n95) - 1]
+        p99 = latency_set[int(n99) - 1]
+        p999 = latency_set[int(n999) - 1]
+
+        print("====== latency stats {0} ======", title)
+        print("\tAvg Latency: {0:8.2f} ms".format(avg * 1000))
+        print("\tP50 Latency: {0:8.2f} ms".format(p50 * 1000))
+        print("\tP90 Latency: {0:8.2f} ms".format(p90 * 1000))
+        print("\tP95 Latency: {0:8.2f} ms".format(p95 * 1000))
+        print("\tP99 Latency: {0:8.2f} ms".format(p99 * 1000))
+        print("\t999 Latency: {0:8.2f} ms".format(p999 * 1000))
 
 
 class MegatronGenerate(Resource):
@@ -50,8 +85,8 @@ class MegatronGenerate(Resource):
         print(json.dumps(request.get_json()), flush=True)
         print("current time: ", datetime.datetime.now())
 
-        if not "prompts" in request.get_json():
-            return "prompts argument required", 400
+        if not "prompt" in request.get_json():
+            return "prompt argument required", 400
 
         if "max_len" in request.get_json():
             return "max_len is no longer used.  Replace with tokens_to_generate", 400
@@ -59,17 +94,15 @@ class MegatronGenerate(Resource):
         if "sentences" in request.get_json():
             return "sentences is no longer used.  Replace with prompts", 400
 
-        prompts = request.get_json()["prompts"]
-        if len(prompts) > 128:
-            return "Maximum number of prompts is 128", 400
+        prompt = request.get_json()["prompt"]
 
-        tokens_to_generate = 64  # Choosing hopefully sane default.  Full sequence is slow
-        if "tokens_to_generate" in request.get_json():
-            tokens_to_generate = request.get_json()["tokens_to_generate"]
-            if not isinstance(tokens_to_generate, int):
-                return "tokens_to_generate must be an integer greater than 0"
-            if tokens_to_generate < 0:
-                return "tokens_to_generate must be an integer greater than or equal to 0"
+        max_tokens = 64
+        if "max_tokens" in request.get_json():
+            max_tokens = request.get_json()["max_tokens"]
+            if not isinstance(max_tokens, int):
+                return "max_tokens must be an integer greater than 0"
+            if max_tokens < 0:
+                return "max_tokens must be an integer greater than or equal to 0"
 
         logprobs = False
         if "logprobs" in request.get_json():
@@ -77,7 +110,7 @@ class MegatronGenerate(Resource):
             if not isinstance(logprobs, bool):
                 return "logprobs must be a boolean value"
 
-        if tokens_to_generate == 0 and not logprobs:
+        if max_tokens == 0 and not logprobs:
             return "tokens_to_generate=0 implies logprobs should be True"
 
         temperature = 1.0
@@ -118,8 +151,8 @@ class MegatronGenerate(Resource):
                 generate_and_post_process(
                     self.model,
                     self.tokenizer,
-                    prompts=prompts,
-                    tokens_to_generate=tokens_to_generate,
+                    prompts=prompt,
+                    tokens_to_generate=max_tokens,
                     return_output_log_probs=logprobs,
                     top_k_sampling=top_k,
                     top_p_sampling=top_p,
@@ -155,7 +188,6 @@ def stream_tokens(
     stop_tokens=None,
     seq_length: int = 0,
     tokenizer=None,
-    is_pipe_parallel: bool = False,
 ):
 
     # pad batch in order to allow conversion to tensor
@@ -226,7 +258,7 @@ def stream_tokens(
                     attention_mask,
                 )
                 logits = forward_model(
-                    model, model_inputs, is_pipe_parallel)
+                    model, model_inputs, model.is_pipe_parallel)
 
                 if logits is not None:  # if pipe parallel, not all ranks return logits
                     generated_token_logits = logits[
@@ -252,7 +284,7 @@ def stream_tokens(
                 )
 
                 logits = forward_model(
-                    model, model_inputs, is_pipe_parallel)
+                    model, model_inputs, model.is_pipe_parallel)
                 if logits is not None:  # if pipe parallel, not all ranks return logits
                     generated_token_logits = (
                         logits[:, -1].view(batch_size, -1).contiguous()
@@ -277,7 +309,7 @@ def stream_tokens(
                         next_token_log_probs, num_samples=1
                     ).view(-1)
 
-            if is_pipe_parallel:
+            if model.is_pipe_parallel:
                 # broadcast generated tokens to pipe parallel group
                 src_rank = model.grid.stage_to_global(model.num_stages - 1)
                 generated_tokens = (
@@ -336,27 +368,9 @@ def generate_and_post_process(
     top_k_sampling,
     top_p_sampling,
     temperature,
-    add_BOS,
-    use_eod_token_for_early_termination,
+    # add_BOS,
+    # use_eod_token_for_early_termination,
 ):
-
-    context_tokens = tokenizer.tokenize(prompts)
-    if len(context_tokens) == 0:
-        context_tokens = [tokenizer.eod]
-    context_length = len(context_tokens)
-
-    max_seq_length = 2048  # FIXME: extract this from the model
-
-    if context_length >= (max_seq_length - 1):
-        context_tokens = context_length[:max_seq_length + 1]
-        context_tokens[-1] = [tokenizer.eod]
-    else:
-        context_tokens = tokenizer.tokenize("EMPTY TEXT")
-        context_length = len(context_tokens)
-
-    # terminate_runs = broadcast_terminate_signal(terminate_runs)
-    # if terminate_runs == 1:
-    #     return
 
     generated_text = ""
 
@@ -392,21 +406,164 @@ def generate_and_post_process(
     return generated_text
 
 
+def get_model(neox_args, use_cache=False):
+    """Build the model."""
+
+    print_rank_0("building GPT2 model ...")
+
+    # Build model on cpu.
+    model = GPT2ModelPipe(
+        neox_args=neox_args,
+        num_tokentypes=0,
+        parallel_output=True,
+        topology=mpu.get_topology(),
+        use_cache=use_cache,
+    )
+
+    ### soft prompt tuning stuff ###
+    if neox_args.soft_prompt_tuning is not None and neox_args.soft_prompt_tuning.get(
+        "enabled", False
+    ):
+        soft_prompt = SoftEmbedding(
+            neox_args,
+            wte=getattr(model, "0").word_embeddings,
+            n_tokens=neox_args.soft_prompt_tuning.get("n_tokens", 10),
+            init_string=neox_args.soft_prompt_tuning.get("init_string", ""),
+            init_range=neox_args.soft_prompt_tuning.get("init_range", 0.5),
+        )
+        model.insert_layers(
+            layers=soft_prompt, idx=1
+        )  # insert the soft prompt layer directly after the word embeddings
+
+        # freeze everything but the soft prompt
+        for name, param in model.named_parameters():
+            if not "soft_embedding" in name:
+                param.requires_grad = False
+
+    if not neox_args.is_pipe_parallel:
+        # Export PipeParallel model to nn.Sequential model to avoid the overhead of deepspeed's pipe parallel training
+        model = model.to_sequential()
+
+    if neox_args.deepspeed:
+        # DeepSpeed handles CUDA, FP16, and DDP components.
+        return model
+    else:
+        raise ValueError("Must be using deepspeed to run neox")
+
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="GPT-NeoX Configuration", allow_abbrev=False
+    )
+
+    group = parser.add_argument_group(title="Inference Configuration")
+
+    group.add_argument(
+        "--local_rank",
+        type=int,
+    )
+
+    group.add_argument(
+        "--conf_dir",
+        "-d",
+        type=str,
+        default=None,
+        help="Directory to prefix to all configuration file paths",
+    )
+
+    group.add_argument(
+        "conf_file",
+        type=str,
+        nargs="+",
+        help="Configuration file path. Multiple files can be provided and will be merged.",
+    )
+
+    return parser.parse_args()
+
+
+def genconfig(conf_dir, conf_files, overwrite_values):
+    # load config files
+    if conf_dir:
+        conf_files = [os.path.join(conf_dir, f)
+                      for f in conf_files]
+
+    # enables us to pass in `small` instead of `small.yml`
+    conf_files = [(cf if cf.endswith(".yml") else cf + ".yml")
+                  for cf in conf_files]
+
+    # load args
+    neox_args = NeoXArgs.from_ymls(
+        paths_to_yml_files=conf_files, overwrite_values=overwrite_values
+    )
+    return neox_args
+
+
+def _get_batch(neox_args, tokenizer, keys, data, datatype):
+    """Support function for get_batch / get_batch pipe (to avoid code repetition)"""
+    data_b = mpu.broadcast_data(keys, data, datatype)
+
+    # Unpack.
+    tokens_ = data_b["text"].long()
+    labels = tokens_[:, 1:].contiguous()
+    tokens = tokens_[:, :-1].contiguous()
+
+    # Get the masks and position ids.
+    attention_mask, loss_mask, position_ids = get_ltor_masks_and_position_ids(
+        data=tokens,
+        eod_token=neox_args.tokenizer.eod,
+        eod_mask_loss=neox_args.eod_mask_loss,
+    )
+
+    return tokens, labels, loss_mask, attention_mask, position_ids
+
+
+def get_batch_pipe(data, neox_args):
+    """A modification of get_batch() to work with the latest batch instead of an iterator."""
+    # Items and their type.
+    keys = ["text"]
+    datatype = torch.int64
+
+    tokens, labels, loss_mask, attention_mask, position_ids = _get_batch(
+        neox_args, neox_args.tokenizer, keys, data, datatype
+    )
+
+    # unpack data
+    return (tokens, position_ids, attention_mask), (labels, loss_mask)
+
+
+def tokenize_text(tokenizer,
+                  prompt,
+                  max_seq_length=2048  # FIXME: extract this from the model
+                  ):
+    context_tokens = tokenizer.tokenize(prompt)
+    if len(context_tokens) == 0:
+        context_tokens = [tokenizer.eod]
+    context_tokens, pad_batch([context_tokens], tokenizer.eod, max_seq_length)
+    generated_text = tokenizer.detokenize(context_tokens)
+    import ipdb
+    ipdb.set_trace()
+    print(generated_text)
+    return context_tokens, context_length
+
+
 def main():
     """
     Generate text/sample model
     """
-    from megatron.neox_arguments import NeoXArgs
-    from megatron.initialize import initialize_megatron
-
-    _overwrite_values = {
+    overwrite_values = {
         "checkpoint_activations": False,
         "partition_activations": False,
         "no_load_optim": True,
         # disable zero optimization (won't be used in inference, and loading zero optimizer can cause errors)
         "zero_optimization": None,
     }
-    neox_args = NeoXArgs.consume_neox_args(overwrite_values=_overwrite_values)
+
+    if os.environ.get('DEEPERSPEED'):
+        neox_args = NeoXArgs.consume_neox_args(
+            overwrite_values=overwrite_values)
+    else:
+        args = parse_arguments()
+        neox_args = genconfig(args.conf_dir, args.conf_file, overwrite_values)
     neox_args.configure_distributed_args()
     neox_args.build_tokenizer()
 
@@ -422,15 +579,16 @@ def main():
     if neox_args.deepspeed:
         print_rank_0("DeepSpeed is enabled.")
 
-        model, optimizer, _, lr_scheduler = deepspeed.initialize(
+        model, *_ = deepspeed.initialize(
+            args=neox_args,
             model=model,
             optimizer=None,
-            args=neox_args,
-            lr_scheduler=None,
-            dist_init_required=False,
             model_parameters=None,
-            config_params=neox_args.deepspeed_config,
+            training_data=None,
+            lr_scheduler=None,
             mpu=mpu if not neox_args.is_pipe_parallel else None,
+            dist_init_required=False,
+            config_params=neox_args.deepspeed_config,
         )
 
         model.total_params = get_total_params(model.module)
@@ -442,33 +600,70 @@ def main():
     else:
         raise ValueError("Must be using deepspeed to run neox")
 
-    # neox_args.iteration = load_checkpoint(
-    #     neox_args=neox_args,
-    #     model=model,
-    #     optimizer=optimizer,
-    #     lr_scheduler=lr_scheduler,
-    #     iteration=None,
-    # )
+    neox_args.iteration = load_checkpoint(
+        neox_args=neox_args,
+        model=model,
+        optimizer=None,
+        lr_scheduler=None,
+        iteration=None,
+    )
+
+    # monkey patch to pass this config
+    model.is_pipe_parallel = neox_args.is_pipe_parallel
 
     print_rank_0(
         f"Loading checkpoint and starting from iteration {neox_args.iteration}"
     )
     print_rank_0("Finished loading model")
 
-    model.module.inference_mode(use_cache=use_cache)
-    model.eval()
-
-    model.module.clear_cache()  # clear kv cache between batches
     torch.distributed.barrier(group=mpu.get_model_parallel_group())
+
+    result = generate_samples_from_prompt(neox_args,
+                                          model,
+                                          text="Who is Charlize Teron?",
+                                          eos_token_id=neox_args.tokenizer.eod_id,
+                                          top_k=0.0,
+                                          top_p=1.0,
+                                          temperature=0.0
+                                          )
 
     if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
-        print("run api server")
-        server = MegatronServer(model, neox_args.tokenizer)
-        server.run("localhost", port=8888)
+        import ipdb
+        ipdb.set_trace()
+        # tokenize_text(neox_args.tokenizer, prompt="Who is Charlize Teron?")
 
-    # wait for all processes to exit
-    torch.distributed.barrier(group=mpu.get_model_parallel_group())
-    print("process %d completed", mpu.get_model_parallel_group())
+        # response, response_seg, response_logprobs, _ = \
+        #     generate_and_post_process(model,
+        #                               neox_args.tokenizer,
+        #                               tokens_to_generate=60,
+        #                               top_k_sampling=0.0,
+        #                               top_p_sampling=1.0,
+        #                               return_output_log_probs=False,
+        #                               temperature=0.0
+        #                               )
+        # print(response)
+        # print("run api server")
+        # server = MegatronServer(model, neox_args.tokenizer)
+        # server.run("localhost", port=8888)
+        terminate = 1
+    else:
+        terminate = 0
+
+    while True:
+        terminate_runs_tensor = torch.cuda.LongTensor([terminate])
+        torch.distributed.broadcast(
+            terminate_runs_tensor,
+            mpu.get_model_parallel_src_rank(),
+            group=mpu.get_model_parallel_group(),
+        )
+        terminate_runs = terminate_runs_tensor[0].item()
+        if terminate_runs == 1:
+            break
+        else:
+            import time
+            print("sleeping for few sconds")
+            time.sleep(10)
+
 
 if __name__ == "__main__":
     main()
