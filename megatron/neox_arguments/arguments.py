@@ -334,7 +334,7 @@ class NeoXArgs(*BASE_CLASSES):
     @classmethod
     def consume_neox_args(cls, overwrite_values=None):
         """
-        Deepspeed launcher needs to pass the arguments for `pretrain_gpt2.py` across to all machines.
+        Deepspeed launcher needs to pass the arguments for `train.py` across to all machines.
 
         In order not to have any problems with different configs being mismatched across machines, we instead read the .yaml configuration file from the main rank,
         then serialize the arguments to a dictionary, which the deepspeed launcher broadcasts to all machines (`--megatron_config`).

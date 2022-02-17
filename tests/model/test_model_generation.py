@@ -7,15 +7,8 @@ to run in order to perform follow up tests. Joining in one test reduces runtime 
 
 
 import os
-
-if __name__ == "__main__":
-    import sys
-
-    sys.path.append(os.path.abspath(""))
-
 import pytest
-from tests.common import distributed_test, model_setup, parametrize, dict_repr
-import torch
+from tests.common import distributed_test, model_setup, parametrize
 
 PARAMS_TO_TEST = {
     "pipe_parallel_size,model_parallel_size,world_size": [

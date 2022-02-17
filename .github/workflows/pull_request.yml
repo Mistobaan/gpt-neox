@@ -11,3 +11,38 @@ jobs:
         with:
           python-version: 3.8
       - uses: pre-commit/action@v2.0.3
+
+  run-tests:
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # install mpi
+          export OPENMPI_BASEVERSION=4.1
+          export OPENMPI_VERSION=${OPENMPI_BASEVERSION}.0
+          export PATH=/usr/local/mpi/bin:${PATH}
+          export LD_LIBRARY_PATH=${GITHUB_WORKSPACE}/usr/local/lib:/usr/local/mpi/lib:/usr/local/mpi/lib64:${LD_LIBRARY_PATH}
+          mkdir -p ${GITHUB_WORKSPACE}/build && \
+              mkdir -p ${GITHUB_WORKSPACE}/usr/local/lib && \
+              pushd ${GITHUB_WORKSPACE}/build && \
+              wget -q -O - https://download.open-mpi.org/release/open-mpi/v${OPENMPI_BASEVERSION}/openmpi-${OPENMPI_VERSION}.tar.gz | tar xzf - && \
+              cd openmpi-${OPENMPI_VERSION} && \
+              ./configure --prefix=${GITHUB_WORKSPACE}/usr/local/openmpi-${OPENMPI_VERSION} && \
+              make -j"$(nproc)" install && \
+              ln -s ${GITHUB_WORKSPACE}/usr/local/openmpi-${OPENMPI_VERSION} ${GITHUB_WORKSPACE}/usr/local/mpi && \
+              test -f ${GITHUB_WORKSPACE}/usr/local/mpi/bin/mpic++ && \
+              export MPICC=${GITHUB_WORKSPACE}/usr/local/mpi/bin/mpic++ && \
+              popd
+          pip install torch==1.8.1+cu111 -f https://download.pytorch.org/whl/torch_stable.html
+          cd ${GITHUB_WORKSPACE}
+          pip install -r requirements/requirements.txt
+          pip install -r requirements/requirements-dev.txt
+          python prepare_data.py
+      - name: Run Tests
+        run: pytest tests -m cpu
