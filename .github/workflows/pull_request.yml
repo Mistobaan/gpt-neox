@@ -45,4 +45,4 @@ jobs:
       #     pip install -r requirements/requirements-dev.txt
       #     python prepare_data.py
       - name: Run Tests
-        run: pytest tests -m cpu
+        run: pytest --forked tests
