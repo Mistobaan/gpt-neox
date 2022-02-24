@@ -282,24 +282,6 @@ def load_checkpoint(
     else:
         print_rank_0(" > could not find arguments in the checkpoint for validation...")
 
-    # Check loaded checkpoint with forward pass
-    if neox_args.checkpoint_validation_with_forward_pass:
-        if "checkpoint_validation_logits" in state_dict:
-            check_forward_pass(
-                neox_args=neox_args,
-                model=model,
-                checkpoint_logits=state_dict["checkpoint_validation_logits"],
-                inference=inference,
-            )
-            print_rank_0(" > validated loaded checkpoint with forward pass ...")
-        else:
-            if mpu.get_data_parallel_rank() == 0:
-                print(
-                    " > WARNING: checkpoint_validation_with_forward_pass is configured but no checkpoint validation data available in checkpoint {}".format(
-                        checkpoint_name
-                    )
-                )
-
     # rng states.
     if not neox_args.finetune and not neox_args.no_load_rng:
         try:
@@ -320,5 +302,23 @@ def load_checkpoint(
     torch.distributed.barrier()
     if mpu.get_data_parallel_rank() == 0:
         print("  successfully loaded {}".format(checkpoint_name))
+
+    # Check loaded checkpoint with forward pass
+    if neox_args.checkpoint_validation_with_forward_pass:
+        if "checkpoint_validation_logits" in state_dict:
+            check_forward_pass(
+                neox_args=neox_args,
+                model=model,
+                checkpoint_logits=state_dict["checkpoint_validation_logits"],
+                inference=inference,
+            )
+            print_rank_0(" > validated loaded checkpoint with forward pass ...")
+        else:
+            if mpu.get_data_parallel_rank() == 0:
+                print(
+                    " > WARNING: checkpoint_validation_with_forward_pass is configured but no checkpoint validation data available in checkpoint {}".format(
+                        checkpoint_name
+                    )
+                )
 
     return iteration

@@ -19,7 +19,8 @@ from tests.common import (
 import torch
 
 PARAMS_TO_TEST = {
-    "pipe_parallel_size,model_parallel_size": [[0, 1], [1, 2], [0, 2], [2, 1]],
+    "global_num_gpus": [2],
+    "pipe_parallel_size,model_parallel_size": [[1, 1], [0, 1], [1, 2], [0, 2], [2, 1]],
     "checkpoint_validation_with_forward_pass": [True],
     "fp16,fp32_allreduce": [
         [
